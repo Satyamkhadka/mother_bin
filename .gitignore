@@ -1,0 +1,6 @@
+build
+.cache
+tools
+*.md
+sdkconfig
+*.txt

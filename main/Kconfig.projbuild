@@ -1,0 +1,105 @@
+menu "DLM (Device Lifecycle Manager) Configuration"
+
+    config DLM_LED_GPIO
+        int "Status LED GPIO number"
+        range -1 48
+        default 2
+        help
+            GPIO number for the status LED. Set to -1 to disable LED support.
+            Default is GPIO2 (built-in LED on most ESP32 dev boards).
+    
+    config DLM_LED_ACTIVE_HIGH
+        bool "LED active high"
+        default y
+        help
+            If enabled, LED is on when GPIO is high.
+            Disable for active-low LED wiring.
+    
+    config DLM_RESET_BUTTON_GPIO
+        int "Factory reset button GPIO number"
+        range -1 48
+        default 0
+        help
+            GPIO number for factory reset button. Set to -1 to disable.
+            Default is GPIO0 (boot button on most dev boards).
+            Hold this button during boot to trigger factory reset.
+    
+    config DLM_RESET_BUTTON_ACTIVE_LOW
+        bool "Reset button active low"
+        default y
+        help
+            Most buttons are wired with pull-up, so active low (press = low).
+            Disable if your button is wired active high.
+    
+    config DLM_AP_SSID_PREFIX
+        string "AP mode SSID prefix"
+        default "ELM"
+        help
+            Prefix for the WiFi SSID in AP mode.
+            Full SSID will be: <PREFIX>-<MAC_ADDRESS>
+    
+    config DLM_FACTORY_RESET_THRESHOLD
+        int "Factory reset reset-count threshold"
+        range 3 20
+        default 10
+        help
+            Number of consecutive resets required to trigger factory reset.
+            Resets include: power cycles, software reboots, watchdog resets.
+    
+    config DLM_FACTORY_RESET_WINDOW_MS
+        int "Factory reset time window (ms)"
+        range 3000 60000
+        default 10000
+        help
+            Time window for counting resets. If this time passes between
+            resets, the counter is cleared.
+    
+    menu "OTA Configuration"
+        
+        config DLM_OTA_PROVIDER
+            string "Default OTA provider"
+            default "github"
+            help
+                Default provider for firmware updates.
+                Options: "github" or "custom"
+        
+        config DLM_OTA_SERVER_URL
+            string "OTA server URL / GitHub repo"
+            default ""
+            help
+                For GitHub: "owner/repo" format (e.g., "myuser/mydevice")
+                For custom: Full server URL (e.g., "https://ota.example.com")
+        
+        config DLM_OTA_ENABLE_PRERELEASE
+            bool "Allow prerelease updates"
+            default n
+            help
+                If enabled, prerelease versions will be considered for update.
+    
+    endmenu
+    
+    menu "Ed25519 Signature Verification"
+        
+        config DLM_SIGNATURE_VERIFICATION
+            bool "Enable signature verification"
+            default y
+            help
+                Verify Ed25519 signatures before installing OTA updates.
+                Strongly recommended for security.
+        
+        config DLM_EMBEDDED_PUBLIC_KEY
+            string "Ed25519 public key (hex, 64 chars)"
+            default ""
+            help
+                32-byte Ed25519 public key in hexadecimal (64 characters).
+                This key is used to verify firmware signatures.
+                If empty, a placeholder key will be used (verification will fail).
+                
+                To generate:
+                1. openssl genpkey -algorithm Ed25519 -out private.pem
+                2. openssl pkey -in private.pem -pubout -out public.pem
+                3. openssl pkey -in public.pem -pubin -outform DER | tail -c 32 | xxd -p
+    
+    endmenu
+
+endmenu
