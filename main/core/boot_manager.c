@@ -17,6 +17,7 @@
 #include "storage/config_store.h"
 #include "platform/led_indicator.h"
 #include "network/http_server.h"
+#include "network/wifi_manager.h"
 #include "ui/web_portal.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -25,16 +26,7 @@
 #include "freertos/task.h"
 #include "esp_system.h"
 
-/* Forward declarations for network modules */
-/* These will be implemented in Phase 2 */
-esp_err_t wifi_manager_init(void);
-esp_err_t wifi_manager_connect(const char *ssid, const char *password);
-esp_err_t wifi_manager_start_ap(void);
-bool wifi_manager_is_connected(void);
-bool wifi_manager_has_credentials(void);
-esp_err_t wifi_manager_get_credentials(char *ssid, size_t ssid_len, 
-                                        char *pass, size_t pass_len);
-esp_err_t wifi_manager_save_credentials(const char *ssid, const char *password);
+/* WiFi manager functions now declared in wifi_manager.h */
 
 /* Forward declarations for OTA module */
 /* These will be implemented in Phase 4 */
@@ -51,11 +43,13 @@ static struct {
     boot_complete_cb_t callback;
     bool initialized;
     bool is_first_boot;
+    bool provisioning_entered;  /* Prevent double entry */
 } s_boot = {
     .phase = BOOT_PHASE_INIT,
     .callback = NULL,
     .initialized = false,
-    .is_first_boot = false
+    .is_first_boot = false,
+    .provisioning_entered = false
 };
 
 /* ============== Phase String Mapping ============== */
@@ -150,6 +144,12 @@ static esp_err_t load_configuration(void)
 
 static void enter_provisioning_mode(void)
 {
+    /* Prevent duplicate entry */
+    if (s_boot.provisioning_entered) {
+        return;
+    }
+    s_boot.provisioning_entered = true;
+    
     set_phase(BOOT_PHASE_PROVISIONING);
     ESP_LOGI(TAG, "Entering provisioning mode (AP mode)");
     
@@ -212,8 +212,24 @@ static void start_wifi_connection(void)
         return;
     }
     
-    /* Connection started - will check result later */
-    /* For now, continue to connected state (actual check in main loop) */
+    /* Connection started - wait for result with timeout */
+    /* Connection result will be handled by wifi event callbacks */
+    
+    /* Start timeout timer to detect connection hangs */
+    uint32_t elapsed = 0;
+    while (elapsed < DLM_WIFI_CONNECT_TIMEOUT_SEC * 1000) {
+        /* Check if phase changed (connected or failed) */
+        if (s_boot.phase != BOOT_PHASE_CONNECTING) {
+            return;  /* Event handler took over */
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+        elapsed += 100;
+    }
+    
+    /* Timeout - connection failed */
+    ESP_LOGW(TAG, "WiFi connection timeout");
+    wifi_manager_disconnect();
+    enter_provisioning_mode();
 }
 
 /* ============== OTA Handling ============== */
@@ -505,6 +521,9 @@ void boot_manager_on_wifi_connected(void)
         set_phase(BOOT_PHASE_CONNECTED);
         ESP_LOGI(TAG, "WiFi connected!");
         
+        /* Stop AP now that WiFi is connected */
+        wifi_manager_stop_ap();
+        
         /* Clear reset counter - successful connection */
         reset_detector_clear();
         
@@ -517,10 +536,8 @@ void boot_manager_on_wifi_failed(void)
 {
     ESP_LOGW(TAG, "WiFi connection failed");
     
-    /* If we were connecting from provisioning, stay in AP mode */
+    /* Only handle if we're still in connecting phase */
     if (s_boot.phase == BOOT_PHASE_CONNECTING) {
-        /* Could retry or go back to provisioning */
-        /* For now, enter provisioning mode */
         enter_provisioning_mode();
     }
 }

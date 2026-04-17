@@ -246,10 +246,7 @@ esp_err_t wifi_manager_connect(const char *ssid, const char *password)
         return ESP_ERR_INVALID_STATE;
     }
     
-    /* Stop AP if running */
-    if (s_wifi.state == WIFI_STATE_AP_MODE) {
-        wifi_manager_stop_ap();
-    }
+    /* Keep AP running during connection attempt - stop only on success */
     
     /* Configure STA */
     wifi_config_t wifi_config = {
@@ -265,7 +262,7 @@ esp_err_t wifi_manager_connect(const char *ssid, const char *password)
         strlcpy((char*)wifi_config.sta.password, password, sizeof(wifi_config.sta.password));
     }
     
-    /* Set mode to STA */
+    /* Set mode to APSTA so AP stays active during connection */
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     
@@ -419,13 +416,21 @@ esp_err_t wifi_manager_scan(bool hidden)
     };
     
     /* Set mode to STA for scanning */
-    if (s_wifi.state == WIFI_STATE_IDLE) {
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    bool was_idle = (s_wifi.state == WIFI_STATE_IDLE);
+    if (was_idle) {
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_start());
     }
     
     /* Start scan (blocking) */
     ESP_ERROR_CHECK(esp_wifi_scan_start(&scan_config, true));
+    
+    /* Stop WiFi if we started it just for scanning */
+    if (was_idle) {
+        esp_wifi_stop();
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL));
+        s_wifi.state = WIFI_STATE_IDLE;
+    }
     
     /* Get results */
     uint16_t num_records = DLM_WIFI_MAX_SCAN_RESULTS;

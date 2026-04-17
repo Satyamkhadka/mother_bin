@@ -168,21 +168,23 @@ static esp_err_t settings_handler(int client_fd, const http_request_t *req)
     
     if (field_count < 0) {
         http_server_send_response(client_fd, 400, HTTP_CONTENT_HTML,
-                                   PORTAL_ERROR_HTML, 0);
+                                   error_html_start,
+                                   (size_t)(error_html_end - error_html_start));
         return ESP_FAIL;
     }
     
     /* Extract WiFi credentials */
     const char *ssid = form_parser_get_value(fields, field_count, "hidden_ssid");
     if (ssid == NULL || strlen(ssid) == 0) {
-        ssid = form_parser_get_value(fields, field_count, "ssid");
+        ssid = form_parser_get_value(fields, field_count, "selected_ssid");
     }
     const char *password = form_parser_get_value(fields, field_count, "password");
     if (password == NULL) password = "";
     
     if (ssid == NULL || strlen(ssid) == 0) {
         http_server_send_response(client_fd, 400, HTTP_CONTENT_HTML,
-                                   PORTAL_ERROR_HTML, 0);
+                                   error_html_start,
+                                   (size_t)(error_html_end - error_html_start));
         return ESP_FAIL;
     }
     
@@ -221,7 +223,8 @@ static esp_err_t settings_handler(int client_fd, const http_request_t *req)
     
     /* Send success page */
     http_server_send_response(client_fd, 200, HTTP_CONTENT_HTML,
-                               PORTAL_SUCCESS_HTML, 0);
+                               success_html_start,
+                               (size_t)(success_html_end - success_html_start));
     
     /* Notify boot manager that provisioning is complete */
     /* Small delay to let response send */
@@ -238,7 +241,8 @@ static esp_err_t root_handler(int client_fd, const http_request_t *req)
 {
     (void)req;
     http_server_send_response(client_fd, 200, HTTP_CONTENT_HTML,
-                               PORTAL_PAGE_HTML, 0);
+                               index_html_start,
+                               (size_t)(index_html_end - index_html_start));
     return ESP_OK;
 }
 
