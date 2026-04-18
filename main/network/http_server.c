@@ -373,7 +373,7 @@ static void handle_client(int client_fd)
         } else {
             /* For captive portal detection URLs, redirect to main page */
             ESP_LOGD(TAG, "Captive portal redirect for: %s", req.path);
-            http_server_send_redirect(client_fd, "http://192.168.4.1/settings");
+            http_server_send_redirect(client_fd, "/settings");
         }
     }
     

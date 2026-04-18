@@ -20,7 +20,7 @@ extern "C" {
  * SSID prefix for provisioning mode AP
  * Full SSID will be: ELM-<FullMAC> (e.g., ELM-A1B2C3D4E5F6)
  */
-#define DLM_AP_SSID_PREFIX          "ELM"
+#define DLM_AP_SSID_PREFIX          "BASE"
 
 /** 
  * AP password (NULL for open network, or min 8 chars for WPA2)
@@ -144,6 +144,7 @@ extern "C" {
 #define DLM_OTA_NVS_NAMESPACE           "ota_config"
 #define DLM_OTA_NVS_KEY_SERVER_URL      "server_url"    // backend base URL
 #define DLM_OTA_NVS_KEY_CURRENT_VER     "version"
+#define DLM_OTA_NVS_KEY_UPDATE_PENDING  "update_pending"
 
 /* ============== Custom Server API (your future server) ==============
  * These defaults match the "server decides" API you specified
@@ -154,6 +155,12 @@ extern "C" {
 
 /** API endpoint path for update checks */
 #define DLM_CUSTOM_SERVER_API_PATH      "/api/check-update"
+
+/** API endpoint path for device claiming/provisioning */
+#define DLM_CUSTOM_SERVER_CLAIM_PATH    "/api/provision"
+
+/** mDNS hostname for local access after provisioning */
+#define DLM_MDNS_HOSTNAME               "esplifemanager"
 
 /* ============== Configuration Schema ==============
  * Define your device's configuration fields here.

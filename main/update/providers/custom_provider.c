@@ -211,6 +211,114 @@ static esp_err_t custom_download(const char *download_url,
     return ret;
 }
 
+/* ============== Device Claiming ============== */
+
+esp_err_t custom_provider_claim_device(const char *server_url,
+                                        const char *claim_token,
+                                        char *node_id, size_t node_id_len,
+                                        char *node_secret, size_t node_secret_len,
+                                        char *required_fw_version, size_t fw_ver_len)
+{
+    if (server_url == NULL || strlen(server_url) == 0 ||
+        claim_token == NULL || strlen(claim_token) == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char device_id[32];
+    get_device_id(device_id, sizeof(device_id));
+
+    char hardware_version[32] = "";
+    config_store_get_string("hardware_version", hardware_version, sizeof(hardware_version));
+    if (strlen(hardware_version) == 0) {
+        strcpy(hardware_version, "v1");
+    }
+
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "claim_token", claim_token);
+    cJSON_AddStringToObject(req, "device_id", device_id);
+    cJSON_AddStringToObject(req, "hardware_version", hardware_version);
+    cJSON_AddStringToObject(req, "chip_model", CONFIG_IDF_TARGET);
+    char *post_data = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+
+    char url[320];
+    snprintf(url, sizeof(url), "%s%s", server_url, DLM_CUSTOM_SERVER_CLAIM_PATH);
+
+    char response_buf[4096] = {0};
+    http_accumulator_t acc = {
+        .buffer   = response_buf,
+        .buf_size = sizeof(response_buf),
+        .data_len = 0
+    };
+
+    esp_http_client_config_t cfg = {
+        .url           = url,
+        .event_handler = http_event_handler,
+        .user_data     = &acc,
+        .timeout_ms    = 15000,
+        .method        = HTTP_METHOD_POST,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (client == NULL) {
+        free(post_data);
+        return ESP_FAIL;
+    }
+
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(post_data);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Claim request failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    if (status != 200) {
+        ESP_LOGE(TAG, "Claim server returned %d", status);
+        return ESP_FAIL;
+    }
+        ESP_LOGI(TAG, "Claim server returned %d", status);
+
+
+    cJSON *root = cJSON_Parse(response_buf);
+    if (root == NULL) {
+        ESP_LOGE(TAG, "Failed to parse claim response");
+        return ESP_FAIL;
+    }
+
+    cJSON *j_success = cJSON_GetObjectItem(root, "success");
+    if (!cJSON_IsTrue(j_success)) {
+        ESP_LOGE(TAG, "Sucess is not true");
+        cJSON_Delete(root);
+        return ESP_FAIL;
+    }
+
+    cJSON *j_node_id = cJSON_GetObjectItem(root, "node_id");
+    cJSON *j_secret  = cJSON_GetObjectItem(root, "node_secret");
+
+    if (!cJSON_IsString(j_node_id) || !cJSON_IsString(j_secret)) {
+        ESP_LOGE(TAG, "Missing node_id or node_secret in claim response");
+        cJSON_Delete(root);
+        return ESP_FAIL;
+    }
+
+    strlcpy(node_id, j_node_id->valuestring, node_id_len);
+    strlcpy(node_secret, j_secret->valuestring, node_secret_len);
+
+    cJSON *j_fw = cJSON_GetObjectItem(root, "required_fw_version");
+    if (cJSON_IsString(j_fw) && required_fw_version != NULL && fw_ver_len > 0) {
+        strlcpy(required_fw_version, j_fw->valuestring, fw_ver_len);
+    }
+
+    cJSON_Delete(root);
+    ESP_LOGI(TAG, "Device claimed: node_id=%s", node_id);
+    return ESP_OK;
+}
+
 /* ============== Provider Instance ============== */
 
 static const ota_provider_t s_custom_provider = {

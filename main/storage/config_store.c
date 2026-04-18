@@ -53,6 +53,35 @@ const config_field_def_t dlm_config_schema[] = {
         .max_value = 0
     },
     
+    /* Node Identity */
+    {
+        .name = "node_id",
+        .label = "Node ID",
+        .type = CONFIG_FIELD_TYPE_STRING,
+        .default_str = "",
+        .default_num = 0,
+        .min_value = 0,
+        .max_value = 0
+    },
+    {
+        .name = "node_secret",
+        .label = "Node Secret",
+        .type = CONFIG_FIELD_TYPE_STRING,
+        .default_str = "",
+        .default_num = 0,
+        .min_value = 0,
+        .max_value = 0
+    },
+    {
+        .name = "claim_token",
+        .label = "Claim Token",
+        .type = CONFIG_FIELD_TYPE_STRING,
+        .default_str = "",
+        .default_num = 0,
+        .min_value = 0,
+        .max_value = 0
+    },
+    
     /* Update Configuration */
     {
         .name = "update_interval_min",

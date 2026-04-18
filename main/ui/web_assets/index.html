@@ -1,1 +1,267 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Device Configuration</title><style>* { box-sizing: border-box; margin: 0; padding: 0; }body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: #f5f5f7; color: #1d1d1f; line-height: 1.5; padding: 20px; min-height: 100vh; }.container { max-width: 480px; margin: 0 auto; }.card { background: white; border-radius: 16px; padding: 24px; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }.header { text-align: center; margin-bottom: 24px; }.header h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }.header p { color: #86868b; font-size: 14px; }.section-title { font-size: 14px; font-weight: 600; text-transform: uppercase; color: #86868b; margin-bottom: 16px; letter-spacing: 0.5px; }.form-group { margin-bottom: 20px; }label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 8px; color: #1d1d1f; }input[type="text"], input[type="password"], input[type="number"], select { width: 100%; padding: 12px 16px; border: 1px solid #d2d2d7; border-radius: 10px; font-size: 16px; background: #fbfbfd; transition: border-color 0.2s, box-shadow 0.2s; }input:focus, select:focus { outline: none; border-color: #0071e3; box-shadow: 0 0 0 4px rgba(0,113,227,0.15); }.toggle { position: relative; display: inline-block; width: 50px; height: 30px; }.toggle input { opacity: 0; width: 0; height: 0; }.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #d2d2d7; transition: .3s; border-radius: 30px; }.slider:before { position: absolute; content: ""; height: 22px; width: 22px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; }input:checked + .slider { background-color: #34c759; }input:checked + .slider:before { transform: translateX(20px); }.btn { width: 100%; padding: 16px; border: none; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.2s; }.btn-primary { background: #0071e3; color: white; }.btn-primary:hover { background: #0077ed; }.btn-primary:active { transform: scale(0.98); }.btn-success { background: #34c759; color: white; }.btn:disabled { opacity: 0.6; cursor: not-allowed; }.network-list { max-height: 200px; overflow-y: auto; }.network-item { display: flex; align-items: center; padding: 12px; border-radius: 10px; cursor: pointer; transition: background 0.2s; margin-bottom: 4px; }.network-item:hover { background: #f5f5f7; }.network-item.selected { background: #0071e3; color: white; }.network-item.selected .network-secure { color: rgba(255, 255, 255, 0.8); }.network-icon { width: 24px; height: 24px; margin-right: 12px; }.network-info { flex: 1; }.network-name { font-weight: 500; }.network-secure { font-size: 12px; color: #86868b; }.hidden-form { display: none; }.message { padding: 16px; border-radius: 10px; margin-bottom: 16px; text-align: center; font-size: 14px; }.message.success { background: #d4edda; color: #155724; }.message.error { background: #f8d7da; color: #721c24; }.loading { text-align: center; padding: 40px; color: #86868b; }.spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #f3f3f3; border-top: 3px solid #0071e3; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style></head><body><div class="container"><div class="card"><div class="header"><h1>⚙️ Device Setup</h1><p>Configure your device to connect to your network</p></div><div id="message"></div><form id="configForm" method="POST" action="/settings"><div class="section-title">WiFi Network</div><div id="wifiSection"><div class="loading"><div class="spinner"></div>Scanning...</div></div><div class="form-group hidden-form" id="passwordGroup"><label for="password">Password</label><input type="password" id="password" name="password" placeholder="Enter WiFi password" /></div><div class="form-group hidden-form" id="hiddenSsidGroup"><label for="hidden_ssid">Hidden Network SSID</label><input type="text" id="hidden_ssid" name="hidden_ssid" placeholder="Enter network name" /></div><div class="form-group"><label><input type="checkbox" id="hiddenNetwork" onchange="toggleHiddenNetwork()" /> Connect to hidden network</label></div><input type="hidden" id="selected_ssid" name="ssid" /><div class="section-title">Device Configuration</div><div id="configFields"><div class="loading"><div class="spinner"></div>Loading...</div></div><button type="submit" class="btn btn-primary" id="submitBtn">Save & Connect</button></form></div></div><script>let selectedSsid = ""; let configSchema = null; fetch("/config").then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }).then(data => { configSchema = data; if (data.fields) renderConfigFields(data.fields); else throw new Error("Invalid response"); }).catch(e => { document.getElementById("configFields").innerHTML = "<div class='message error'>Failed to load config: " + escapeHtml(e.message) + "</div>"; console.error("Config fetch error:", e); }); fetch("/scan").then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }).then(data => { if (data.networks) renderNetworks(data.networks); else throw new Error("Invalid response"); }).catch(e => { document.getElementById("wifiSection").innerHTML = "<div class='message error'>Scan failed: " + escapeHtml(e.message) + "</div>"; console.error("Scan fetch error:", e); }); function renderNetworks(networks) { const container = document.getElementById("wifiSection"); if (!networks || networks.length === 0) { container.innerHTML = "<div class='message error'>No networks found</div>"; return; } let html = "<div class='network-list'>"; networks.forEach(n => { const secure = n.auth !== 0; html += "<div class='network-item' data-ssid=\"" + escapeAttr(n.ssid) + "\" data-secure=\"" + secure + "\" onclick='handleNetworkClick(this)'>"; html += "<div class='network-icon'>" + (secure ? "🔒" : "📡") + "</div>"; html += "<div class='network-info'><div class='network-name'>" + escapeHtml(n.ssid) + "</div>"; html += "<div class='network-secure'>" + (secure ? "Secure" : "Open") + " • " + n.rssi + "dBm</div></div>"; html += "</div>"; }); html += "</div>"; container.innerHTML = html; } function handleNetworkClick(el) { selectNetwork(el.dataset.ssid, el.dataset.secure === 'true', el); } function selectNetwork(ssid, secure, el) { selectedSsid = ssid; document.querySelectorAll('.network-item').forEach(e => e.classList.remove('selected')); if (el) el.classList.add('selected'); document.getElementById('selected_ssid').value = ssid; document.getElementById('hidden_ssid').value = ssid; document.getElementById('passwordGroup').classList.toggle('hidden-form', !secure); if (!secure) document.getElementById('password').value = ''; } function toggleHiddenNetwork() { const isHidden = document.getElementById('hiddenNetwork').checked; document.getElementById('wifiSection').classList.toggle('hidden-form', isHidden); document.getElementById('hiddenSsidGroup').classList.toggle('hidden-form', !isHidden); if (isHidden) document.getElementById('passwordGroup').classList.remove('hidden-form'); } function renderConfigFields(fields) { const container = document.getElementById('configFields'); let html = ''; fields.forEach(f => { html += "<div class='form-group'>"; html += "<label for='" + f.name + "'>" + escapeHtml(f.label) + "</label>"; if (f.type === 'string') { html += "<input type='text' id='" + f.name + "' name='" + f.name + "' value='" + escapeHtml(f.value || '') + "'>"; } else if (f.type === 'number') { html += "<input type='number' id='" + f.name + "' name='" + f.name + "' value='" + f.value + "' min='" + (f.min || 0) + "' max='" + (f.max || 999999) + "'>"; } else if (f.type === 'boolean') { html += "<label class='toggle'><input type='checkbox' id='" + f.name + "' name='" + f.name + "'" + (f.value ? " checked" : "") + "><span class='slider'></span></label>"; } html += "</div>"; }); container.innerHTML = html; document.getElementById('configForm').addEventListener('submit', function(e) { fields.forEach(f => { if (f.type === 'boolean') { const cb = document.getElementById(f.name); if (cb) { cb.type = 'hidden'; cb.value = cb.checked ? 'true' : 'false'; } } }); document.getElementById('submitBtn').disabled = true; document.getElementById('submitBtn').textContent = 'Connecting...'; }); } function escapeHtml(text) { if (!text) return ''; return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); } function escapeAttr(text) { if (!text) return ''; return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }</script></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Device Setup</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,sans-serif;background:#f0f0f5;color:#1d1d1f;line-height:1.5;padding:16px;min-height:100vh}
+.container{max-width:480px;margin:0 auto}
+.card{background:#fff;border-radius:14px;padding:22px;margin-bottom:14px;box-shadow:0 1px 6px rgba(0,0,0,0.06)}
+.header{text-align:center;margin-bottom:20px}
+.header h1{font-size:22px;font-weight:600;margin-bottom:4px}
+.header p{color:#86868b;font-size:13px}
+.section-title{font-size:12px;font-weight:600;text-transform:uppercase;color:#86868b;margin-bottom:12px;letter-spacing:0.5px}
+.form-group{margin-bottom:16px}
+label{display:block;font-size:13px;font-weight:500;margin-bottom:6px;color:#1d1d1f}
+input,select{width:100%;padding:11px 14px;border:1px solid #d2d2d7;border-radius:10px;font-size:15px;background:#fbfbfd;transition:border-color .2s}
+input:focus,select:focus{outline:none;border-color:#0071e3}
+.btn{width:100%;padding:14px;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;transition:opacity .2s;margin-bottom:10px}
+.btn-primary{background:#0071e3;color:#fff}
+.btn-secondary{background:#e3e3e8;color:#1d1d1f}
+.btn-danger{background:#ff3b30;color:#fff}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn:last-child{margin-bottom:0}
+.btn:hover{opacity:.9}
+.error{color:#ff3b30;font-size:13px;margin-top:8px;display:none}
+.error.show{display:block}
+.success{color:#34c759;font-size:13px;margin-top:8px;display:none}
+.success.show{display:block}
+.hidden{display:none}
+.small{color:#86868b;font-size:12px;margin-top:4px;display:block}
+.status-grid{display:grid;gap:10px}
+.status-row{display:flex;justify-content:space-between;font-size:13px;padding:8px 0;border-bottom:1px solid #f0f0f5}
+.status-row:last-child{border-bottom:none}
+.status-row span:first-child{color:#86868b}
+.status-row span:last-child{font-weight:500;word-break:break-all;max-width:60%;text-align:right}
+.spinner{display:inline-block;width:18px;height:18px;border:2px solid #0071e3;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loading{text-align:center;padding:40px 0}
+.divider{text-align:center;margin:14px 0;color:#86868b;font-size:13px}
+#wifi-connecting{text-align:center;padding:20px 0;display:none}
+#wifi-connecting.show{display:block}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<h1>ESP Life Manager</h1>
+<p id="subtitle">Loading device status...</p>
+</div>
+
+<div id="loading">
+<div class="spinner"></div>
+<p style="color:#86868b;font-size:13px;margin-top:10px">Please wait</p>
+</div>
+
+<div id="transition-banner" class="card hidden" style="background:#e8f5e9;border:1px solid #34c759;text-align:center">
+<p style="color:#2e7d32;font-weight:500">WiFi Connected!</p>
+<p style="color:#1b5e20;font-size:13px;margin-top:4px">Please switch to your home WiFi and visit<br><strong>http://esplifemanager.local</strong><br>to finish setup.</p>
+<button id="change-wifi-from-transition" class="btn btn-secondary" style="margin-top:14px">Change WiFi Network</button>
+</div>
+
+<div id="wifi-card" class="card hidden">
+<div class="section-title">WiFi Setup</div>
+<div class="form-group">
+<label>Network</label>
+<select id="ssid-select"><option value="">Scanning...</option></select>
+<input type="text" id="hidden-ssid" placeholder="Or enter hidden network" style="margin-top:8px">
+</div>
+<div class="form-group">
+<label>Password</label>
+<input type="password" id="password" placeholder="Leave empty for open network">
+</div>
+<div class="form-group">
+<label>Server URL</label>
+<input type="text" id="server-url" placeholder="https://your-server.com">
+<span class="small">Leave empty to keep current address</span>
+</div>
+<button id="save-wifi" class="btn btn-primary">Connect</button>
+<div id="wifi-error" class="error"></div>
+<div id="wifi-connecting">
+<div class="spinner"></div>
+<p style="color:#86868b;font-size:13px;margin-top:10px">Connecting to WiFi...</p>
+<p style="color:#86868b;font-size:12px;margin-top:4px">This page will update automatically</p>
+</div>
+</div>
+
+<div id="node-card" class="card hidden">
+<div class="section-title">Node Configuration</div>
+<div id="claim-form">
+<div class="form-group">
+<label>Claim Token</label>
+<input type="text" id="claim-token" placeholder="Paste your claim token">
+</div>
+<button id="claim-btn" class="btn btn-primary">Claim Device</button>
+<div class="divider">or</div>
+<button id="show-manual" class="btn btn-secondary">Enter Manually</button>
+</div>
+<div id="manual-form" class="hidden">
+<div class="form-group">
+<label>Node ID</label>
+<input type="text" id="node-id" placeholder="Enter node ID">
+</div>
+<div class="form-group">
+<label>Node Secret</label>
+<input type="text" id="node-secret" placeholder="Enter node secret">
+</div>
+<button id="save-node" class="btn btn-primary">Save Configuration</button>
+<button id="back-claim" class="btn btn-secondary">Back to Claim</button>
+</div>
+<div id="node-success" class="success"></div>
+<div id="node-error" class="error"></div>
+<button id="change-wifi-from-node" class="btn btn-secondary" style="margin-top:10px">Change WiFi Network</button>
+</div>
+
+<div id="status-card" class="card hidden">
+<div class="section-title">Device Status</div>
+<div class="status-grid">
+<div class="status-row"><span>Device ID</span><span id="st-device-id">-</span></div>
+<div class="status-row"><span>IP Address</span><span id="st-ip">-</span></div>
+<div class="status-row"><span>WiFi Network</span><span id="st-ssid">-</span></div>
+<div class="status-row"><span>Server URL</span><span id="st-server">-</span></div>
+<div class="status-row"><span>Node ID</span><span id="st-node">-</span></div>
+<div class="status-row"><span>Status</span><span id="st-phase">-</span></div>
+</div>
+<div style="margin-top:16px">
+<button id="reset-node-btn" class="btn btn-secondary">Clear Node Config</button>
+<button id="reset-wifi-btn" class="btn btn-danger">Reset WiFi & Reboot</button>
+</div>
+</div>
+</div>
+
+<script>
+(function(){
+let pollTimer=null;
+let currentPhase='';
+let wifiSubmitPending=false;
+
+function $(id){return document.getElementById(id)}
+function show(id){$(id).classList.remove('hidden')}
+function hide(id){$(id).classList.add('hidden')}
+function setErr(id,msg){const e=$(id);e.textContent=msg;e.classList.add('show')}
+function clearErr(id){const e=$(id);e.textContent='';e.classList.remove('show')}
+
+async function api(url,opts){const r=await fetch(url,opts);return r.json()}
+
+async function loadStatus(){
+const d=await api('/status');
+currentPhase=d.phase;
+$('subtitle').textContent=d.wifi_connected?'Connected to '+d.ssid:'Configure your device';
+$('st-device-id').textContent=d.device_id;
+$('st-ip').textContent=d.ip||'-';$('st-ssid').textContent=d.ssid||'-';$('st-server').textContent=d.backend_url||'-';$('st-node').textContent=d.node_id||'Not configured';
+$('st-phase').textContent=d.phase;
+
+if(d.wifi_connected){wifiSubmitPending=false;}
+if(d.phase==='PROVISIONING'){wifiSubmitPending=false;}
+
+if(!d.wifi_connected){
+ hide('loading');show('wifi-card');hide('node-card');hide('status-card');hide('transition-banner');
+ if(wifiSubmitPending){
+  $('save-wifi').disabled=true;show('wifi-connecting');
+ }else{
+  $('save-wifi').disabled=false;hide('wifi-connecting');
+  if(d.ssid){$('hidden-ssid').value=d.ssid;}
+  if(d.backend_url){$('server-url').value=d.backend_url;}
+ }
+}else if(d.ap_active){
+ hide('loading');hide('wifi-card');hide('node-card');hide('status-card');show('transition-banner');
+}else if(!d.has_node_config){
+ hide('loading');hide('wifi-card');show('node-card');hide('status-card');hide('transition-banner');
+ hide('wifi-connecting');$('save-wifi').disabled=false;
+}else{
+ hide('loading');hide('wifi-card');hide('node-card');show('status-card');hide('transition-banner');
+ hide('wifi-connecting');$('save-wifi').disabled=false;
+}
+}
+
+async function loadScan(){
+const d=await api('/scan');
+const s=$('ssid-select');
+const prev=s.value;
+s.innerHTML='';
+if(d.networks&&d.networks.length){
+ const o=document.createElement('option');o.value='';o.textContent='Select a network...';s.appendChild(o);
+ d.networks.forEach(n=>{
+  const o=document.createElement('option');
+  o.value=n.ssid;o.textContent=n.ssid+' ('+n.rssi+' dBm)'+(n.auth?'':' [Open]');
+  if(n.ssid===prev){o.selected=true}
+  s.appendChild(o);
+ });
+}else{
+ const o=document.createElement('option');o.value='';o.textContent='No networks found';s.appendChild(o);
+}
+}
+
+$('save-wifi').addEventListener('click',async function(){
+ clearErr('wifi-error');
+ const ssid=$('ssid-select').value||$('hidden-ssid').value;
+ const pass=$('password').value;
+ const url=$('server-url').value;
+ if(!ssid){setErr('wifi-error','Please select or enter a network name');return}
+ wifiSubmitPending=true;
+ $('save-wifi').disabled=true;show('wifi-connecting');
+ const body='selected_ssid='+encodeURIComponent(ssid)+'&password='+encodeURIComponent(pass)+'&server_address='+encodeURIComponent(url);
+ try{
+  await api('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=setInterval(loadStatus,2500);
+ }catch(e){wifiSubmitPending=false;$('save-wifi').disabled=false;hide('wifi-connecting');setErr('wifi-error','Failed to save. Please retry.')}
+});
+
+$('claim-btn').addEventListener('click',async function(){
+ clearErr('node-error');clearErr('node-success');
+ const token=$('claim-token').value.trim();
+ if(!token){setErr('node-error','Please enter a claim token');return}
+ try{
+  const r=await api('/claim',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'claim_token='+encodeURIComponent(token)});
+  if(r.success){
+   $('node-success').textContent='Device claimed successfully!';
+   $('node-success').classList.add('show');
+   setTimeout(loadStatus,1500);
+  }else{setErr('node-error',r.error||'Claim failed')}
+ }catch(e){setErr('node-error','Claim failed. Check server and token.')}
+});
+
+$('show-manual').addEventListener('click',function(){hide('claim-form');show('manual-form')});
+$('back-claim').addEventListener('click',function(){show('claim-form');hide('manual-form')});
+
+$('save-node').addEventListener('click',async function(){
+ clearErr('node-error');clearErr('node-success');
+ const id=$('node-id').value.trim();
+ const secret=$('node-secret').value.trim();
+ if(!id||!secret){setErr('node-error','Both Node ID and Secret are required');return}
+ try{
+  await api('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'node_id='+encodeURIComponent(id)+'&node_secret='+encodeURIComponent(secret)});
+  $('node-success').textContent='Configuration saved! Proceeding...';
+  $('node-success').classList.add('show');
+  setTimeout(async function(){
+   try{await api('/continue',{method:'POST'});}catch(e){}
+   loadStatus();
+  },800);
+ }catch(e){setErr('node-error','Failed to save configuration')}
+});
+
+async function resetWifiAndReboot(){
+ if(!confirm('Reset WiFi and reboot into provisioning mode?'))return;
+ try{await api('/reset-wifi',{method:'POST'});}catch(e){}
+}
+
+$('reset-wifi-btn').addEventListener('click',resetWifiAndReboot);
+$('change-wifi-from-transition').addEventListener('click',resetWifiAndReboot);
+$('change-wifi-from-node').addEventListener('click',resetWifiAndReboot);
+
+$('reset-node-btn').addEventListener('click',async function(){
+ if(!confirm('Clear node configuration?'))return;
+ try{await api('/reset-node',{method:'POST'});loadStatus();}catch(e){}
+});
+
+loadScan();
+loadStatus();
+if(pollTimer)clearInterval(pollTimer);
+pollTimer=setInterval(function(){if(currentPhase==='CONNECTING'||currentPhase==='PROVISIONING'){loadStatus()}},3000);
+})();
+</script>
+</body>
+</html>

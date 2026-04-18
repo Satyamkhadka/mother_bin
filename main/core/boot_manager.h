@@ -110,6 +110,14 @@ esp_err_t boot_manager_provisioning_complete(const char *ssid, const char *passw
 void boot_manager_retry_connection(void);
 
 /**
+ * @brief Notify boot manager that node configuration is complete
+ * 
+ * Called when user has claimed or manually configured node credentials.
+ * Triggers OTA check and application boot.
+ */
+void boot_manager_node_config_complete(void);
+
+/**
  * @brief Boot application firmware from OTA partition
  * 
  * This function does not return if successful - it boots the app.

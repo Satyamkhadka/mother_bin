@@ -4,3 +4,4 @@ tools
 *.md
 sdkconfig
 *.txt
+managed_components

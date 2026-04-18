@@ -18,6 +18,7 @@
 #include "platform/led_indicator.h"
 #include "network/http_server.h"
 #include "network/wifi_manager.h"
+#include "network/dns_server.h"
 #include "ui/web_portal.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -25,6 +26,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
+#include "mdns.h"
 
 /* WiFi manager functions now declared in wifi_manager.h */
 
@@ -290,6 +292,9 @@ static void check_for_update(void)
     nvs_manager_set_string(DLM_OTA_NVS_NAMESPACE, DLM_BOOT_REASON_NVS_KEY,
                            DLM_BOOT_REASON_AFTER_UPDATE);
     
+    /* Set update pending flag for application */
+    nvs_manager_set_uint8(DLM_OTA_NVS_NAMESPACE, DLM_OTA_NVS_KEY_UPDATE_PENDING, 1);
+    
     /* Delay for callback then reboot */
     vTaskDelay(pdMS_TO_TICKS(2000));
     esp_restart();
@@ -387,13 +392,20 @@ esp_err_t boot_manager_provisioning_complete(const char *ssid, const char *passw
 void boot_manager_retry_connection(void)
 {
     if (s_boot.phase == BOOT_PHASE_PROVISIONING) {
-        /* Already in AP mode, user should use web UI */
         ESP_LOGW(TAG, "Already in provisioning mode");
         return;
     }
     
     ESP_LOGI(TAG, "Retrying WiFi connection...");
     start_wifi_connection();
+}
+
+void boot_manager_node_config_complete(void)
+{
+    if (s_boot.phase == BOOT_PHASE_CONNECTED) {
+        ESP_LOGI(TAG, "Node configuration complete, proceeding to OTA check");
+        check_for_update();
+    }
 }
 
 bool boot_manager_has_application(void)
@@ -523,6 +535,16 @@ led_pattern_t boot_manager_get_led_pattern(void)
 /* ============== WiFi Event Callback ==============
  * Called by wifi_manager when connection status changes
  */
+static void delayed_ap_stop_task(void *pvParameters)
+{
+    (void)pvParameters;
+    vTaskDelay(pdMS_TO_TICKS(20000));
+    wifi_manager_stop_ap();
+    dns_server_stop();
+    ESP_LOGI("boot_manager", "AP stopped after grace period");
+    vTaskDelete(NULL);
+}
+
 void boot_manager_on_wifi_connected(void)
 {
     if (s_boot.phase == BOOT_PHASE_CONNECTING || 
@@ -531,14 +553,43 @@ void boot_manager_on_wifi_connected(void)
         set_phase(BOOT_PHASE_CONNECTED);
         ESP_LOGI(TAG, "WiFi connected!");
         
-        /* Keep AP running for local management access */
-        /* User can still reach 192.168.4.1 while STA is connected */
+        /* Start mDNS for local access */
+        esp_err_t err = mdns_init();
+        if (err == ESP_OK) {
+            mdns_hostname_set(DLM_MDNS_HOSTNAME);
+            mdns_instance_name_set("ESP Life Manager");
+            mdns_service_add(NULL, "_http", "_tcp", DLM_HTTP_PORT, NULL, 0);
+            ESP_LOGI(TAG, "mDNS started: http://%s.local", DLM_MDNS_HOSTNAME);
+        } else {
+            ESP_LOGW(TAG, "mDNS init failed: %s", esp_err_to_name(err));
+        }
+        
+        /* Ensure HTTP server is running for web portal access */
+        esp_err_t srv_err = http_server_init(DLM_HTTP_PORT);
+        if (srv_err != ESP_OK) {
+            ESP_LOGW(TAG, "HTTP server init failed: %s", esp_err_to_name(srv_err));
+        }
+        
+        srv_err = web_portal_init();
+        if (srv_err != ESP_OK) {
+            ESP_LOGW(TAG, "Web portal init failed: %s", esp_err_to_name(srv_err));
+        }
+        
+        /* Delay AP shutdown so user sees transition message */
+        xTaskCreate(delayed_ap_stop_task, "ap_stop_delay", 2048, NULL, 5, NULL);
         
         /* Clear reset counter - successful connection */
         reset_detector_clear();
         
-        /* Proceed to OTA check */
-        check_for_update();
+        /* Check if node is already configured */
+        char node_id[64] = {0};
+        err = config_store_get_string("node_id", node_id, sizeof(node_id));
+        if (err == ESP_OK && strlen(node_id) > 0) {
+            ESP_LOGI(TAG, "Node configured (%s), proceeding to OTA", node_id);
+            check_for_update();
+        } else {
+            ESP_LOGI(TAG, "WiFi ready. Visit http://%s.local to configure node", DLM_MDNS_HOSTNAME);
+        }
     }
 }
 
