@@ -55,7 +55,10 @@ extern "C" {
 /* ============== WiFi Configuration ============== */
 
 /** WiFi connection timeout (seconds) */
-#define DLM_WIFI_CONNECT_TIMEOUT_SEC    30
+#define DLM_WIFI_CONNECT_TIMEOUT_SEC    60
+
+/** Maximum STA connection retries before falling back to provisioning */
+#define DLM_WIFI_MAX_CONNECT_RETRIES    5
 
 /** Maximum WiFi scan results to store/display */
 #define DLM_WIFI_MAX_SCAN_RESULTS       20
@@ -139,10 +142,8 @@ extern "C" {
  * Stores: update server URL, current version, etc.
  */
 #define DLM_OTA_NVS_NAMESPACE           "ota_config"
-#define DLM_OTA_NVS_KEY_PROVIDER        "provider"      // "github" or "custom"
-#define DLM_OTA_NVS_KEY_SERVER_URL      "server_url"    // repo or custom URL
+#define DLM_OTA_NVS_KEY_SERVER_URL      "server_url"    // backend base URL
 #define DLM_OTA_NVS_KEY_CURRENT_VER     "version"
-#define DLM_OTA_NVS_KEY_USE_PRERELEASE  "use_prerelease"
 
 /* ============== Custom Server API (your future server) ==============
  * These defaults match the "server decides" API you specified
@@ -153,17 +154,6 @@ extern "C" {
 
 /** API endpoint path for update checks */
 #define DLM_CUSTOM_SERVER_API_PATH      "/api/check-update"
-
-/* ============== GitHub API Configuration ============== */
-
-/** GitHub API base URL */
-#define DLM_GITHUB_API_URL              "https://api.github.com"
-
-/** GitHub releases endpoint format */
-#define DLM_GITHUB_RELEASES_ENDPOINT    "/repos/%s/releases/latest"
-
-/** User-Agent for GitHub API requests (required) */
-#define DLM_GITHUB_USER_AGENT           "ELM-Device/1.0"
 
 /* ============== Configuration Schema ==============
  * Define your device's configuration fields here.

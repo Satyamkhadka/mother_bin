@@ -71,12 +71,13 @@ static void boot_complete_handler(boot_result_t result, const char *message)
             break;
             
         case BOOT_RESULT_ERROR:
-            /* Fatal error - indicate and halt */
+            /* Fatal error - indicate and halt; do NOT auto-restart */
             ESP_LOGE(TAG, "Fatal error: %s", message);
             led_indicate_error();
-            /* Could reboot after delay or wait for reset */
-            vTaskDelay(pdMS_TO_TICKS(5000));
-            esp_restart();
+            /* Stay in error state so user can see LED and flash firmware */
+            while (1) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
             break;
     }
 }

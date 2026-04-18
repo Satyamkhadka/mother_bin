@@ -31,6 +31,7 @@ typedef struct {
     /* Connection tracking */
     bool has_ip;
     esp_ip4_addr_t ip_addr;
+    int connect_retries;
 } wifi_state_t;
 
 static wifi_state_t s_wifi = {0};
@@ -44,7 +45,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         switch (event_id) {
             case WIFI_EVENT_STA_START:
                 ESP_LOGI(TAG, "STA started");
-                esp_wifi_connect();
+                /* Connect is triggered explicitly by wifi_manager_connect() */
                 break;
                 
             case WIFI_EVENT_STA_CONNECTED:
@@ -57,10 +58,23 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 wifi_event_sta_disconnected_t *evt = event_data;
                 ESP_LOGW(TAG, "STA disconnected, reason: %d", evt->reason);
                 s_wifi.has_ip = false;
-                s_wifi.state = WIFI_STATE_STA_FAILED;
                 
-                /* Notify boot manager */
-                boot_manager_on_wifi_failed();
+                /* Fail fast on permanent errors; retry transient ones */
+                bool permanent = (evt->reason == WIFI_REASON_AUTH_FAIL ||
+                                  evt->reason == WIFI_REASON_NO_AP_FOUND ||
+                                  evt->reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT);
+                
+                if (!permanent && s_wifi.connect_retries < DLM_WIFI_MAX_CONNECT_RETRIES) {
+                    s_wifi.connect_retries++;
+                    ESP_LOGI(TAG, "Retrying connection (%d/%d)...",
+                             s_wifi.connect_retries, DLM_WIFI_MAX_CONNECT_RETRIES);
+                    s_wifi.state = WIFI_STATE_STA_CONNECTING;
+                    esp_wifi_connect();
+                } else {
+                    s_wifi.state = WIFI_STATE_STA_FAILED;
+                    /* Notify boot manager */
+                    boot_manager_on_wifi_failed();
+                }
                 break;
             }
             
@@ -246,14 +260,18 @@ esp_err_t wifi_manager_connect(const char *ssid, const char *password)
         return ESP_ERR_INVALID_STATE;
     }
     
-    /* Keep AP running during connection attempt - stop only on success */
+    /* Stop WiFi before reconfiguring to avoid "sta is connecting" errors */
+    esp_wifi_stop();
+    s_wifi.connect_retries = 0;
     
     /* Configure STA */
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = {0},
             .password = {0},
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .threshold.authmode = WIFI_AUTH_OPEN,
+            .scan_method = WIFI_ALL_CHANNEL_SCAN,
+            .sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
         },
     };
     
@@ -266,8 +284,9 @@ esp_err_t wifi_manager_connect(const char *ssid, const char *password)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     
-    /* Start WiFi */
+    /* Start WiFi and explicitly connect */
     ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_connect();
     
     s_wifi.state = WIFI_STATE_STA_CONNECTING;
     ESP_LOGI(TAG, "Connecting to %s...", ssid);
@@ -367,12 +386,19 @@ esp_err_t wifi_manager_start_ap(void)
 
 esp_err_t wifi_manager_stop_ap(void)
 {
-    if (s_wifi.state != WIFI_STATE_AP_MODE) {
+    wifi_mode_t mode;
+    esp_err_t err = esp_wifi_get_mode(&mode);
+    if (err != ESP_OK || (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA)) {
         return ESP_OK;
     }
     
-    ESP_ERROR_CHECK(esp_wifi_stop());
-    s_wifi.state = WIFI_STATE_IDLE;
+    if (mode == WIFI_MODE_APSTA) {
+        /* Keep STA running, just drop AP */
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    } else {
+        ESP_ERROR_CHECK(esp_wifi_stop());
+        s_wifi.state = WIFI_STATE_IDLE;
+    }
     
     ESP_LOGI(TAG, "AP stopped");
     return ESP_OK;

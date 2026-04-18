@@ -32,7 +32,16 @@ const config_field_def_t dlm_config_schema[] = {
         .min_value = 0,
         .max_value = 0
     },
-    
+    {
+        .name = "hardware_version",
+        .label = "Hardware Version",
+        .type = CONFIG_FIELD_TYPE_STRING,
+        .default_str = "v1",
+        .default_num = 0,
+        .min_value = 0,
+        .max_value = 0
+    },
+
     /* Backend Connectivity */
     {
         .name = "backend_url",

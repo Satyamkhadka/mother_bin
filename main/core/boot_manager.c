@@ -203,6 +203,10 @@ static void start_wifi_connection(void)
     }
     
     ESP_LOGI(TAG, "Connecting to WiFi: %s", ssid);
+    ESP_LOGI(TAG, "Connecting to WiFi pass: %s", password);
+    
+    /* Keep AP up so 192.168.4.1 remains accessible after STA connects */
+    wifi_manager_start_ap();
     
     err = wifi_manager_connect(ssid, password);
     if (err != ESP_OK) {
@@ -417,27 +421,19 @@ esp_err_t boot_manager_boot_application(void)
     /* Check if we have an application to boot */
     const esp_partition_t *ota_partition = esp_ota_get_next_update_partition(NULL);
     if (ota_partition == NULL) {
-        ESP_LOGE(TAG, "No OTA partition found!");
-        set_phase(BOOT_PHASE_ERROR);
-        if (s_boot.callback) {
-            s_boot.callback(BOOT_RESULT_ERROR, "No application firmware found");
-        }
-        return ESP_FAIL;
+        ESP_LOGW(TAG, "No OTA partition found, staying in DLM");
+        goto stay_in_dlm;
     }
-    
-    ESP_LOGI(TAG, "Booting application from partition: %s", ota_partition->label);
     
     /* Verify app is valid */
     esp_app_desc_t app_desc;
     esp_err_t err = esp_ota_get_partition_description(ota_partition, &app_desc);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to read app description: %s", esp_err_to_name(err));
-        set_phase(BOOT_PHASE_ERROR);
-        if (s_boot.callback) {
-            s_boot.callback(BOOT_RESULT_ERROR, "Invalid application firmware");
-        }
-        return err;
+        ESP_LOGW(TAG, "No valid app in %s, staying in DLM", ota_partition->label);
+        goto stay_in_dlm;
     }
+    
+    ESP_LOGI(TAG, "Booting application from partition: %s", ota_partition->label);
     
     ESP_LOGI(TAG, "App version: %s", app_desc.version);
     ESP_LOGI(TAG, "App name: %s", app_desc.project_name);
@@ -473,8 +469,22 @@ esp_err_t boot_manager_boot_application(void)
     /* Boot the application - does not return on success */
     esp_restart();
     
-    /* Should never reach here */
-    return ESP_FAIL;
+stay_in_dlm:
+    /* No valid application — keep DLM running with web interface accessible */
+    ESP_LOGI(TAG, "DLM interface active");
+    
+    esp_err_t srv_err = http_server_init(DLM_HTTP_PORT);
+    if (srv_err != ESP_OK) {
+        ESP_LOGW(TAG, "HTTP server init failed: %s", esp_err_to_name(srv_err));
+    }
+    
+    srv_err = web_portal_init();
+    if (srv_err != ESP_OK) {
+        ESP_LOGW(TAG, "Web portal init failed: %s", esp_err_to_name(srv_err));
+    }
+    
+    set_phase(BOOT_PHASE_CONNECTED);
+    return ESP_OK;
 }
 
 led_pattern_t boot_manager_get_led_pattern(void)
@@ -521,8 +531,8 @@ void boot_manager_on_wifi_connected(void)
         set_phase(BOOT_PHASE_CONNECTED);
         ESP_LOGI(TAG, "WiFi connected!");
         
-        /* Stop AP now that WiFi is connected */
-        wifi_manager_stop_ap();
+        /* Keep AP running for local management access */
+        /* User can still reach 192.168.4.1 while STA is connected */
         
         /* Clear reset counter - successful connection */
         reset_detector_clear();

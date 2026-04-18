@@ -107,7 +107,7 @@ typedef struct {
 
 /* ============== OTA Provider Interface ==============
  * Abstract interface for firmware update sources
- * Implement this to add new update sources (GitHub, custom server, etc.)
+ * Implement this to add new update sources (firmware-manager backend, etc.)
  */
 
 struct dlm_ota_provider;
