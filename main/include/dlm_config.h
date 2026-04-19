@@ -126,7 +126,7 @@ extern "C" {
  * Maximum firmware size to accept (bytes)
  * Should match your partition size
  */
-#define DLM_OTA_MAX_FIRMWARE_SIZE       (1024 * 1024)  // 1MB
+#define DLM_OTA_MAX_FIRMWARE_SIZE       (2560 * 1024)  // 2.5MB, matches ota_0 partition
 
 /** 
  * OTA download chunk size

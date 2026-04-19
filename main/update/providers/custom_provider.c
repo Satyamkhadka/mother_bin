@@ -236,6 +236,7 @@ esp_err_t custom_provider_claim_device(const char *server_url,
     cJSON *req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "claim_token", claim_token);
     cJSON_AddStringToObject(req, "device_id", device_id);
+    cJSON_AddStringToObject(req, "mac_address", device_id);
     cJSON_AddStringToObject(req, "hardware_version", hardware_version);
     cJSON_AddStringToObject(req, "chip_model", CONFIG_IDF_TARGET);
     char *post_data = cJSON_PrintUnformatted(req);
@@ -316,6 +317,94 @@ esp_err_t custom_provider_claim_device(const char *server_url,
 
     cJSON_Delete(root);
     ESP_LOGI(TAG, "Device claimed: node_id=%s", node_id);
+    return ESP_OK;
+}
+
+/* ============== Query Releases ============== */
+
+esp_err_t custom_provider_query_releases(const char *server_url,
+                                          const char *hardware_version,
+                                          const char *chip_model,
+                                          char *releases_buf,
+                                          size_t releases_buf_len)
+{
+    if (server_url == NULL || strlen(server_url) == 0 ||
+        releases_buf == NULL || releases_buf_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char device_id[32];
+    get_device_id(device_id, sizeof(device_id));
+
+    char device_type[32] = "not-alloted";
+    config_store_get_string("device_type", device_type, sizeof(device_type));
+    if (strlen(device_type) == 0) {
+        strcpy(device_type, "not-alloted");
+    }
+
+    char device[32] = "not-alloted";
+    config_store_get_string("device", device, sizeof(device));
+    if (strlen(device) == 0) {
+        strcpy(device, "not-alloted");
+    }
+
+    char sub_type[32] = "";
+    config_store_get_string("sub_type", sub_type, sizeof(sub_type));
+
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "deviceId", device_id);
+    cJSON_AddStringToObject(req, "hardwareVersion", hardware_version ? hardware_version : "");
+    cJSON_AddStringToObject(req, "chipModel", chip_model ? chip_model : "");
+    cJSON_AddStringToObject(req, "deviceType", device_type);
+    cJSON_AddStringToObject(req, "device", device);
+    if (strlen(sub_type) > 0) {
+        cJSON_AddStringToObject(req, "subType", sub_type);
+    }
+    char *post_data = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+
+    char url[320];
+    snprintf(url, sizeof(url), "%s/api/firmware-catalog", server_url);
+
+    char response_buf[8192] = {0};
+    http_accumulator_t acc = {
+        .buffer   = response_buf,
+        .buf_size = sizeof(response_buf),
+        .data_len = 0
+    };
+
+    esp_http_client_config_t cfg = {
+        .url           = url,
+        .event_handler = http_event_handler,
+        .user_data     = &acc,
+        .timeout_ms    = 15000,
+        .method        = HTTP_METHOD_POST,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (client == NULL) {
+        free(post_data);
+        return ESP_FAIL;
+    }
+
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(post_data);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Catalog query failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    if (status != 200) {
+        ESP_LOGE(TAG, "Catalog server returned %d", status);
+        return ESP_FAIL;
+    }
+
+    strlcpy(releases_buf, response_buf, releases_buf_len);
     return ESP_OK;
 }
 

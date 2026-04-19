@@ -41,6 +41,17 @@ input:focus,select:focus{outline:none;border-color:#0071e3}
 .divider{text-align:center;margin:14px 0;color:#86868b;font-size:13px}
 #wifi-connecting{text-align:center;padding:20px 0;display:none}
 #wifi-connecting.show{display:block}
+.checkbox-label{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;font-weight:500}
+.checkbox-label input{width:auto;margin:0}
+.progress-bar{background:#e3e3e8;border-radius:6px;height:8px;overflow:hidden}
+.progress-bar>div{background:#0071e3;height:100%;border-radius:6px;transition:width .3s}
+.fw-item{border:1px solid #d2d2d7;border-radius:10px;padding:12px;margin-bottom:10px}
+.fw-item .fw-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.fw-item .fw-version{font-weight:600;font-size:14px}
+.fw-item .fw-badge{color:#ff3b30;font-size:11px;font-weight:600;margin-left:6px}
+.fw-item .fw-meta{color:#86868b;font-size:12px;margin-bottom:8px}
+.fw-item .fw-notes{color:#86868b;font-size:12px;margin-bottom:10px}
+.fw-item .btn{padding:10px;font-size:13px;margin-bottom:0}
 </style>
 </head>
 <body>
@@ -122,8 +133,53 @@ input:focus,select:focus{outline:none;border-color:#0071e3}
 <div class="status-row"><span>WiFi Network</span><span id="st-ssid">-</span></div>
 <div class="status-row"><span>Server URL</span><span id="st-server">-</span></div>
 <div class="status-row"><span>Node ID</span><span id="st-node">-</span></div>
+<div class="status-row"><span>Device</span><span id="st-device">-</span></div>
+<div class="status-row"><span>Device Type</span><span id="st-device-type">-</span></div>
+<div class="status-row"><span>Sub Type</span><span id="st-sub-type">-</span></div>
+<div class="status-row"><span>Version</span><span id="st-version">-</span></div>
 <div class="status-row"><span>Status</span><span id="st-phase">-</span></div>
 </div>
+
+<div id="device-config-section" style="margin-top:16px">
+<div class="section-title">Device Classification</div>
+<div class="form-group">
+<label>Device *</label>
+<input type="text" id="cfg-device" placeholder="e.g. light-switch">
+<span class="small">Required identifier (not-alloted = placeholder)</span>
+</div>
+<div class="form-group">
+<label>Device Type</label>
+<input type="text" id="cfg-device-type" placeholder="e.g. esp32-relay">
+<span class="small">Optional refinement</span>
+</div>
+<div class="form-group">
+<label>Sub Type</label>
+<input type="text" id="cfg-sub-type" placeholder="e.g. 2-gang">
+<span class="small">Optional refinement</span>
+</div>
+<button id="save-device-config" class="btn btn-primary" style="margin-bottom:10px">Save</button>
+<div id="device-config-error" class="error"></div>
+<div id="device-config-success" class="success"></div>
+</div>
+
+<div id="firmware-section" class="hidden" style="margin-top:16px">
+<div class="section-title">Firmware</div>
+<div class="form-group">
+<label class="checkbox-label">
+<input type="checkbox" id="auto-update-toggle">
+<span>Automatic updates</span>
+</label>
+<span class="small">Downstream app reads this flag to decide update policy</span>
+</div>
+<div id="ota-progress" class="hidden" style="text-align:center;padding:12px 0">
+<div class="spinner"></div>
+<p style="color:#86868b;font-size:13px;margin-top:8px" id="ota-status-text">Downloading...</p>
+<div class="progress-bar"><div id="ota-progress-bar" style="width:0%"></div></div>
+</div>
+<div id="firmware-list"></div>
+<button id="boot-app-btn" class="btn btn-primary hidden" style="margin-top:10px">Boot Application</button>
+</div>
+
 <div style="margin-top:16px">
 <button id="reset-node-btn" class="btn btn-secondary">Clear Node Config</button>
 <button id="reset-wifi-btn" class="btn btn-danger">Reset WiFi & Reboot</button>
@@ -136,6 +192,8 @@ input:focus,select:focus{outline:none;border-color:#0071e3}
 let pollTimer=null;
 let currentPhase='';
 let wifiSubmitPending=false;
+let g_releases=[];
+let otaPolling=false;
 
 function $(id){return document.getElementById(id)}
 function show(id){$(id).classList.remove('hidden')}
@@ -150,14 +208,13 @@ const d=await api('/status');
 currentPhase=d.phase;
 $('subtitle').textContent=d.wifi_connected?'Connected to '+d.ssid:'Configure your device';
 $('st-device-id').textContent=d.device_id;
-$('st-ip').textContent=d.ip||'-';$('st-ssid').textContent=d.ssid||'-';$('st-server').textContent=d.backend_url||'-';$('st-node').textContent=d.node_id||'Not configured';
-$('st-phase').textContent=d.phase;
+$('st-ip').textContent=d.ip||'-';$('st-ssid').textContent=d.ssid||'-';$('st-server').textContent=d.backend_url||'-';$('st-node').textContent=d.node_id||'Not configured';$('st-device').textContent=d.device||'-';$('st-device-type').textContent=d.device_type||'-';$('st-sub-type').textContent=d.sub_type||'-';$('st-version').textContent=d.current_version||'-';$('st-phase').textContent=d.phase;
 
 if(d.wifi_connected){wifiSubmitPending=false;}
 if(d.phase==='PROVISIONING'){wifiSubmitPending=false;}
 
 if(!d.wifi_connected){
- hide('loading');show('wifi-card');hide('node-card');hide('status-card');hide('transition-banner');
+ hide('loading');show('wifi-card');hide('node-card');hide('status-card');hide('transition-banner');hide('firmware-section');
  if(wifiSubmitPending){
   $('save-wifi').disabled=true;show('wifi-connecting');
  }else{
@@ -166,13 +223,35 @@ if(!d.wifi_connected){
   if(d.backend_url){$('server-url').value=d.backend_url;}
  }
 }else if(d.ap_active){
- hide('loading');hide('wifi-card');hide('node-card');hide('status-card');show('transition-banner');
+ hide('loading');hide('wifi-card');hide('node-card');hide('status-card');show('transition-banner');hide('firmware-section');
 }else if(!d.has_node_config){
- hide('loading');hide('wifi-card');show('node-card');hide('status-card');hide('transition-banner');
+ hide('loading');hide('wifi-card');show('node-card');hide('status-card');hide('transition-banner');hide('firmware-section');
  hide('wifi-connecting');$('save-wifi').disabled=false;
 }else{
- hide('loading');hide('wifi-card');hide('node-card');show('status-card');hide('transition-banner');
+ hide('loading');hide('wifi-card');hide('node-card');show('status-card');hide('transition-banner');show('firmware-section');show('device-config-section');
  hide('wifi-connecting');$('save-wifi').disabled=false;
+ $('auto-update-toggle').checked=d.auto_update;
+ if(d.has_app){show('boot-app-btn');}else{hide('boot-app-btn');}
+ $('cfg-device').value=d.device||'';
+ $('cfg-device-type').value=d.device_type||'';
+ $('cfg-sub-type').value=d.sub_type||'';
+
+ if(d.ota_state==='downloading'||d.ota_state==='verifying'){
+  show('ota-progress');hide('firmware-list');hide('boot-app-btn');
+  $('ota-status-text').textContent=d.ota_state==='downloading'?'Downloading firmware...':'Verifying signature...';
+  $('ota-progress-bar').style.width=d.ota_progress+'%';
+  if(!otaPolling){otaPolling=true;setTimeout(function(){otaPolling=false;loadStatus();},1500);}
+ }else if(d.ota_state==='complete'){
+  show('ota-progress');hide('firmware-list');hide('boot-app-btn');
+  $('ota-status-text').textContent='Installation complete. Rebooting...';
+  $('ota-progress-bar').style.width='100%';
+ }else if(d.ota_state==='failed'){
+  hide('ota-progress');show('firmware-list');if(d.has_app)show('boot-app-btn');
+  $('ota-status-text').textContent='Installation failed.';
+ }else{
+  hide('ota-progress');show('firmware-list');if(d.has_app)show('boot-app-btn');
+  if(!window.firmwaresLoaded){loadFirmwareReleases();window.firmwaresLoaded=true;}
+ }
 }
 }
 
@@ -192,6 +271,66 @@ if(d.networks&&d.networks.length){
 }else{
  const o=document.createElement('option');o.value='';o.textContent='No networks found';s.appendChild(o);
 }
+}
+
+async function loadFirmwareReleases(){
+const container=$('firmware-list');
+container.innerHTML='<p style="color:#86868b;font-size:13px">Loading available firmwares...</p>';
+try{
+ const d=await api('/firmware-releases');
+ let releases=[];
+ if(d.firmwareCatalog&&d.firmwareCatalog.latestThree&&Array.isArray(d.firmwareCatalog.latestThree)){releases=d.firmwareCatalog.latestThree;}
+ else if(d.releases&&Array.isArray(d.releases)){releases=d.releases;}
+ else if(Array.isArray(d)){releases=d;}
+ g_releases=releases;
+ if(releases.length===0){
+  container.innerHTML='<p style="color:#86868b;font-size:13px">No firmware releases available.</p>';
+  return;
+ }
+ let html='';
+ releases.forEach((r,i)=>{
+  const size=r.file_size?((r.file_size/1024).toFixed(1)+' KB'):(r.fileSize?((r.fileSize/1024).toFixed(1)+' KB'):'');
+  const notes=r.release_notes||r.releaseNotes||'';
+  const forced=r.force_update||r.forceUpdate;
+  const version=r.version||'?';
+  const url=r.download_url||r.filePath||r.downloadUrl||'';
+  html+='<div class="fw-item">';
+  html+='<div class="fw-header"><span class="fw-version">v'+version+'</span>'+(forced?'<span class="fw-badge">REQUIRED</span>':'')+'</div>';
+  if(notes) html+='<div class="fw-notes">'+notes+'</div>';
+  if(size) html+='<div class="fw-meta">'+size+'</div>';
+  html+='<button class="btn btn-primary" onclick="window.triggerInstall('+i+')">Install</button>';
+  html+='</div>';
+ });
+ container.innerHTML=html;
+}catch(e){
+ container.innerHTML='<p style="color:#ff3b30;font-size:13px">Unable to load firmware list. Check backend URL.</p>';
+}
+}
+
+window.triggerInstall=function(idx){
+ const r=g_releases[idx];
+ if(!r)return;
+ const payload={
+  version:r.version||'',
+  download_url:r.download_url||r.filePath||r.downloadUrl||'',
+  signature:r.signature||'',
+  file_size:r.file_size||r.fileSize||0
+ };
+ installFirmware(payload);
+};
+
+async function installFirmware(release){
+ hide('firmware-list');hide('boot-app-btn');show('ota-progress');
+ $('ota-status-text').textContent='Starting download...';
+ $('ota-progress-bar').style.width='0%';
+ window.firmwaresLoaded=false;
+ try{
+  await api('/ota-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(release)});
+  loadStatus();
+ }catch(e){
+  hide('ota-progress');show('firmware-list');
+  alert('Failed to start installation. Please retry.');
+ }
 }
 
 $('save-wifi').addEventListener('click',async function(){
@@ -243,6 +382,33 @@ $('save-node').addEventListener('click',async function(){
  }catch(e){setErr('node-error','Failed to save configuration')}
 });
 
+$('auto-update-toggle').addEventListener('change',async function(){
+ const val=$('auto-update-toggle').checked?'true':'false';
+ try{await api('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'auto_update='+val});}catch(e){}
+});
+
+$('save-device-config').addEventListener('click',async function(){
+ clearErr('device-config-error');
+ const device=$('cfg-device').value.trim();
+ if(!device){setErr('device-config-error','Device is required');return}
+ const device_type=$('cfg-device-type').value.trim();
+ const sub_type=$('cfg-sub-type').value.trim();
+ const body='device='+encodeURIComponent(device)+'&device_type='+encodeURIComponent(device_type)+'&sub_type='+encodeURIComponent(sub_type);
+ try{
+  await api('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  $('device-config-success').textContent='Saved!';
+  $('device-config-success').classList.add('show');
+  setTimeout(function(){$('device-config-success').classList.remove('show');},2000);
+  window.firmwaresLoaded=false;
+  loadFirmwareReleases();
+ }catch(e){setErr('device-config-error','Failed to save');}
+});
+
+$('boot-app-btn').addEventListener('click',async function(){
+ if(!confirm('Boot the installed application?'))return;
+ try{await api('/boot-app',{method:'POST'});}catch(e){}
+});
+
 async function resetWifiAndReboot(){
  if(!confirm('Reset WiFi and reboot into provisioning mode?'))return;
  try{await api('/reset-wifi',{method:'POST'});}catch(e){}
@@ -254,13 +420,13 @@ $('change-wifi-from-node').addEventListener('click',resetWifiAndReboot);
 
 $('reset-node-btn').addEventListener('click',async function(){
  if(!confirm('Clear node configuration?'))return;
- try{await api('/reset-node',{method:'POST'});loadStatus();}catch(e){}
+ try{await api('/reset-node',{method:'POST'});window.firmwaresLoaded=false;loadStatus();}catch(e){}
 });
 
 loadScan();
 loadStatus();
 if(pollTimer)clearInterval(pollTimer);
-pollTimer=setInterval(function(){if(currentPhase==='CONNECTING'||currentPhase==='PROVISIONING'){loadStatus()}},3000);
+pollTimer=setInterval(loadStatus,3000);
 })();
 </script>
 </body>

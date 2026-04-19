@@ -19,7 +19,10 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "mbedtls/base64.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "ota_manager";
 
@@ -33,6 +36,12 @@ typedef struct {
 static ota_config_t s_config = {0};
 static bool s_initialized = false;
 static dlm_release_info_t s_pending_update = {0};
+
+/* ============== OTA State Tracking ============== */
+
+static volatile dlm_ota_state_t s_ota_state = OTA_STATE_IDLE;
+static volatile int s_ota_progress = 0;
+static TaskHandle_t s_ota_task_handle = NULL;
 
 /* ============== Configuration Loading ============== */
 
@@ -58,6 +67,131 @@ static esp_err_t load_config(void)
              s_config.server_url, s_config.current_version);
 
     return ESP_OK;
+}
+
+/* ============== Internal Helpers ============== */
+
+static void update_progress(int percent)
+{
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    s_ota_progress = percent;
+}
+
+static esp_err_t do_perform_update(const dlm_release_info_t *info,
+                                    void (*progress_cb)(int percent))
+{
+    const ota_provider_t *provider = ota_provider_get_custom();
+    if (provider == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (strlen(info->download_url) == 0) {
+        ESP_LOGE(TAG, "No download URL");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Starting OTA update to version %s...", info->version);
+
+    if (progress_cb) {
+        progress_cb(5);
+    }
+
+    /* Download firmware */
+    esp_err_t err = provider->download(info->download_url, progress_cb);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Download failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    if (progress_cb) {
+        progress_cb(85);
+    }
+
+    /* Verify signature */
+    if (info->file_size > 0 && strlen(info->signature) > 0) {
+        const esp_partition_t *ota_partition = esp_ota_get_next_update_partition(NULL);
+        if (ota_partition != NULL) {
+            const void *mapped = NULL;
+            esp_partition_mmap_handle_t mmap_handle;
+            err = esp_partition_mmap(ota_partition, 0, info->file_size,
+                                      ESP_PARTITION_MMAP_DATA,
+                                      &mapped, &mmap_handle);
+            if (err == ESP_OK) {
+                uint8_t decoded_sig[ED25519_SIGNATURE_SIZE];
+                size_t sig_len = 0;
+                int b64_err = mbedtls_base64_decode(
+                    decoded_sig, sizeof(decoded_sig), &sig_len,
+                    (const uint8_t *)info->signature, strlen(info->signature));
+
+                if (b64_err == 0 && sig_len == ED25519_SIGNATURE_SIZE) {
+                    err = signature_verifier_check((const uint8_t *)mapped,
+                                                    info->file_size,
+                                                    decoded_sig, sig_len);
+                } else {
+                    ESP_LOGE(TAG, "Failed to decode signature");
+                    err = ESP_FAIL;
+                }
+
+                esp_partition_munmap(mmap_handle);
+
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Signature verification FAILED");
+
+                    /* Rollback boot partition to current app */
+                    const esp_partition_t *running = esp_ota_get_running_partition();
+                    esp_ota_set_boot_partition(running);
+
+                    return ESP_FAIL;
+                }
+                ESP_LOGI(TAG, "Signature verified");
+            } else {
+                ESP_LOGW(TAG, "Failed to mmap partition for verification");
+            }
+        }
+    } else {
+        ESP_LOGW(TAG, "Skipping signature verification: missing file_size or signature");
+    }
+
+    if (progress_cb) {
+        progress_cb(100);
+    }
+
+    /* Save new version to NVS */
+    nvs_manager_set_string(DLM_OTA_NVS_NAMESPACE,
+                           DLM_OTA_NVS_KEY_CURRENT_VER,
+                           info->version);
+
+    ESP_LOGI(TAG, "OTA update completed successfully");
+    ESP_LOGI(TAG, "New version: %s", info->version);
+    ESP_LOGI(TAG, "Reboot to apply update");
+    return ESP_OK;
+}
+
+static void ota_update_task(void *pvParameters)
+{
+    dlm_release_info_t *info = (dlm_release_info_t *)pvParameters;
+    dlm_release_info_t local_info = *info;
+    free(info);
+
+    s_ota_state = OTA_STATE_DOWNLOADING;
+    s_ota_progress = 5;
+
+    esp_err_t err = do_perform_update(&local_info, update_progress);
+
+    if (err == ESP_OK) {
+        s_ota_state = OTA_STATE_COMPLETE;
+        s_ota_progress = 100;
+        ESP_LOGI(TAG, "OTA successful, rebooting in 3s...");
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        esp_restart();
+    } else {
+        s_ota_state = OTA_STATE_FAILED;
+        ESP_LOGE(TAG, "OTA failed");
+    }
+
+    s_ota_task_handle = NULL;
+    vTaskDelete(NULL);
 }
 
 /* ============== Public API ============== */
@@ -135,92 +269,61 @@ esp_err_t ota_manager_perform_update(void (*progress_cb)(int percent))
         return ESP_ERR_INVALID_STATE;
     }
 
-    const ota_provider_t *provider = ota_provider_get_custom();
-    if (provider == NULL) {
-        return ESP_ERR_NOT_FOUND;
+    return do_perform_update(&s_pending_update, progress_cb);
+}
+
+esp_err_t ota_manager_perform_update_with_info(const dlm_release_info_t *info,
+                                                void (*progress_cb)(int percent))
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (info == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
 
-    dlm_release_info_t info = s_pending_update;
-    if (strlen(info.download_url) == 0) {
-        ESP_LOGE(TAG, "No pending update");
+    return do_perform_update(info, progress_cb);
+}
+
+esp_err_t ota_manager_start_update(const dlm_release_info_t *info)
+{
+    if (info == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_ota_task_handle != NULL) {
+        ESP_LOGW(TAG, "OTA already in progress");
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "Starting OTA update to version %s...", info.version);
+    /* Allocate a copy for the task */
+    dlm_release_info_t *info_copy = malloc(sizeof(dlm_release_info_t));
+    if (info_copy == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    *info_copy = *info;
 
-    if (progress_cb) {
-        progress_cb(5);
+    s_ota_state = OTA_STATE_IDLE;
+    s_ota_progress = 0;
+
+    BaseType_t ret = xTaskCreate(ota_update_task, "ota_update", 8192,
+                                  info_copy, 5, &s_ota_task_handle);
+    if (ret != pdPASS) {
+        free(info_copy);
+        s_ota_task_handle = NULL;
+        return ESP_ERR_NO_MEM;
     }
 
-    /* Download firmware */
-    esp_err_t err = provider->download(info.download_url, progress_cb);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Download failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    if (progress_cb) {
-        progress_cb(85);
-    }
-
-    /* Verify signature */
-    if (info.file_size > 0 && strlen(info.signature) > 0) {
-        const esp_partition_t *ota_partition = esp_ota_get_next_update_partition(NULL);
-        if (ota_partition != NULL) {
-            const void *mapped = NULL;
-            esp_partition_mmap_handle_t mmap_handle;
-            err = esp_partition_mmap(ota_partition, 0, info.file_size,
-                                      ESP_PARTITION_MMAP_DATA,
-                                      &mapped, &mmap_handle);
-            if (err == ESP_OK) {
-                uint8_t decoded_sig[ED25519_SIGNATURE_SIZE];
-                size_t sig_len = 0;
-                int b64_err = mbedtls_base64_decode(
-                    decoded_sig, sizeof(decoded_sig), &sig_len,
-                    (const uint8_t *)info.signature, strlen(info.signature));
-
-                if (b64_err == 0 && sig_len == ED25519_SIGNATURE_SIZE) {
-                    err = signature_verifier_check((const uint8_t *)mapped,
-                                                    info.file_size,
-                                                    decoded_sig, sig_len);
-                } else {
-                    ESP_LOGE(TAG, "Failed to decode signature");
-                    err = ESP_FAIL;
-                }
-
-                esp_partition_munmap(mmap_handle);
-
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "Signature verification FAILED");
-
-                    /* Rollback boot partition to current app */
-                    const esp_partition_t *running = esp_ota_get_running_partition();
-                    esp_ota_set_boot_partition(running);
-
-                    return ESP_FAIL;
-                }
-                ESP_LOGI(TAG, "Signature verified");
-            } else {
-                ESP_LOGW(TAG, "Failed to mmap partition for verification");
-            }
-        }
-    } else {
-        ESP_LOGW(TAG, "Skipping signature verification: missing file_size or signature");
-    }
-
-    if (progress_cb) {
-        progress_cb(100);
-    }
-
-    /* Save new version to NVS */
-    nvs_manager_set_string(DLM_OTA_NVS_NAMESPACE,
-                           DLM_OTA_NVS_KEY_CURRENT_VER,
-                           info.version);
-
-    ESP_LOGI(TAG, "OTA update completed successfully");
-    ESP_LOGI(TAG, "New version: %s", info.version);
-    ESP_LOGI(TAG, "Reboot to apply update");
     return ESP_OK;
+}
+
+dlm_ota_state_t ota_manager_get_state(void)
+{
+    return s_ota_state;
+}
+
+int ota_manager_get_progress(void)
+{
+    return s_ota_progress;
 }
 
 esp_err_t ota_manager_get_current_version(char *version, size_t len)

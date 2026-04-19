@@ -489,17 +489,20 @@ void http_server_deinit(void)
     if (!s_server.initialized) {
         return;
     }
-    
+
     s_server.initialized = false;
-    
+
     if (s_server.server_fd >= 0) {
         close(s_server.server_fd);
         s_server.server_fd = -1;
     }
-    
+
     if (s_server.task_handle) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+
+    /* Clear route table so it can be repopulated on next init */
+    memset(s_server.routes, 0, sizeof(s_server.routes));
 }
 
 esp_err_t http_server_register_handler(const char *method, const char *path,
@@ -508,23 +511,35 @@ esp_err_t http_server_register_handler(const char *method, const char *path,
     if (method == NULL || path == NULL || handler == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    
+
+    /* Replace existing route if method+path already registered */
+    for (int i = 0; i < HTTP_MAX_ROUTES; i++) {
+        if (s_server.routes[i].active &&
+            strcasecmp(s_server.routes[i].method, method) == 0 &&
+            strcmp(s_server.routes[i].path, path) == 0) {
+            s_server.routes[i].handler = handler;
+            s_server.routes[i].user_ctx = user_ctx;
+            ESP_LOGD(TAG, "Replaced handler: %s %s", method, path);
+            return ESP_OK;
+        }
+    }
+
     /* Find free slot */
     for (int i = 0; i < HTTP_MAX_ROUTES; i++) {
         if (!s_server.routes[i].active) {
-            strlcpy(s_server.routes[i].method, method, 
+            strlcpy(s_server.routes[i].method, method,
                     sizeof(s_server.routes[i].method));
             strlcpy(s_server.routes[i].path, path,
                     sizeof(s_server.routes[i].path));
             s_server.routes[i].handler = handler;
             s_server.routes[i].user_ctx = user_ctx;
             s_server.routes[i].active = true;
-            
+
             ESP_LOGD(TAG, "Registered handler: %s %s", method, path);
             return ESP_OK;
         }
     }
-    
+
     ESP_LOGE(TAG, "Route table full");
     return ESP_ERR_NO_MEM;
 }

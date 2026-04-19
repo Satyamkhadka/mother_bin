@@ -243,7 +243,7 @@ static void start_wifi_connection(void)
 static void check_for_update(void)
 {
     set_phase(BOOT_PHASE_OTA_CHECK);
-    
+
     /* Initialize OTA manager */
     esp_err_t err = ota_manager_init();
     if (err != ESP_OK) {
@@ -252,7 +252,7 @@ static void check_for_update(void)
         boot_manager_boot_application();
         return;
     }
-    
+
     /* Check for available update */
     bool update_available = false;
     err = ota_manager_check_update(&update_available);
@@ -262,17 +262,17 @@ static void check_for_update(void)
         boot_manager_boot_application();
         return;
     }
-    
+
     if (!update_available) {
         ESP_LOGI(TAG, "No update available");
         boot_manager_boot_application();
         return;
     }
-    
+
     /* Update available - download and install */
     set_phase(BOOT_PHASE_OTA_UPDATE);
     ESP_LOGI(TAG, "Update available, downloading...");
-    
+
     /* Progress callback would update LED or status */
     err = ota_manager_perform_update(NULL);
     if (err != ESP_OK) {
@@ -281,20 +281,20 @@ static void check_for_update(void)
         boot_manager_boot_application();
         return;
     }
-    
+
     /* Update successful - will reboot */
     ESP_LOGI(TAG, "OTA complete, rebooting...");
     if (s_boot.callback) {
         s_boot.callback(BOOT_RESULT_UPDATING, "Update installed, rebooting...");
     }
-    
+
     /* Set boot reason for app */
     nvs_manager_set_string(DLM_OTA_NVS_NAMESPACE, DLM_BOOT_REASON_NVS_KEY,
                            DLM_BOOT_REASON_AFTER_UPDATE);
-    
+
     /* Set update pending flag for application */
     nvs_manager_set_uint8(DLM_OTA_NVS_NAMESPACE, DLM_OTA_NVS_KEY_UPDATE_PENDING, 1);
-    
+
     /* Delay for callback then reboot */
     vTaskDelay(pdMS_TO_TICKS(2000));
     esp_restart();
@@ -403,8 +403,8 @@ void boot_manager_retry_connection(void)
 void boot_manager_node_config_complete(void)
 {
     if (s_boot.phase == BOOT_PHASE_CONNECTED) {
-        ESP_LOGI(TAG, "Node configuration complete, proceeding to OTA check");
-        check_for_update();
+        ESP_LOGI(TAG, "Node configuration complete. Web portal active for manual OTA/boot.");
+        /* DLM stays active — user controls OTA and app boot from web portal */
     }
 }
 
@@ -585,8 +585,7 @@ void boot_manager_on_wifi_connected(void)
         char node_id[64] = {0};
         err = config_store_get_string("node_id", node_id, sizeof(node_id));
         if (err == ESP_OK && strlen(node_id) > 0) {
-            ESP_LOGI(TAG, "Node configured (%s), proceeding to OTA", node_id);
-            check_for_update();
+            ESP_LOGI(TAG, "Node configured (%s). Web portal active for manual OTA/boot.", node_id);
         } else {
             ESP_LOGI(TAG, "WiFi ready. Visit http://%s.local to configure node", DLM_MDNS_HOSTNAME);
         }

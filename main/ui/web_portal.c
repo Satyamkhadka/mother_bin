@@ -13,13 +13,16 @@
 #include "network/http_server.h"
 #include "network/dns_server.h"
 #include "core/boot_manager.h"
+#include "update/ota_manager.h"
 #include "update/providers/custom_provider.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static const char *TAG = "web_portal";
 
@@ -199,21 +202,6 @@ static esp_err_t settings_handler(int client_fd, const http_request_t *req)
         return ESP_OK;
     }
 
-    /* WiFi provisioning */
-    const char *ssid = form_parser_get_value(fields, field_count, "hidden_ssid");
-    if (ssid == NULL || strlen(ssid) == 0) {
-        ssid = form_parser_get_value(fields, field_count, "selected_ssid");
-    }
-    const char *password = form_parser_get_value(fields, field_count, "password");
-    if (password == NULL) password = "";
-
-    if (ssid == NULL || strlen(ssid) == 0) {
-        send_json_error(client_fd, 400, "SSID is required");
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(TAG, "Configuration received for SSID: %s", ssid);
-
     /* Save custom configuration fields */
     for (int i = 0; i < field_count; i++) {
         if (strcmp(fields[i].key, "ssid") == 0 ||
@@ -234,14 +222,19 @@ static esp_err_t settings_handler(int client_fd, const http_request_t *req)
             continue;
         }
 
-        if (config_store_set_string(fields[i].key, fields[i].value) == ESP_OK) {
-            continue;
+        /* Try boolean first to avoid type mismatch log for bool fields */
+        if (strcmp(fields[i].value, "true") == 0) {
+            if (config_store_set_bool(fields[i].key, true) == ESP_OK) {
+                continue;
+            }
+        } else if (strcmp(fields[i].value, "false") == 0) {
+            if (config_store_set_bool(fields[i].key, false) == ESP_OK) {
+                continue;
+            }
         }
 
-        if (strcmp(fields[i].value, "true") == 0) {
-            config_store_set_bool(fields[i].key, true);
-        } else if (strcmp(fields[i].value, "false") == 0) {
-            config_store_set_bool(fields[i].key, false);
+        if (config_store_set_string(fields[i].key, fields[i].value) == ESP_OK) {
+            continue;
         }
 
         char *endptr;
@@ -251,6 +244,21 @@ static esp_err_t settings_handler(int client_fd, const http_request_t *req)
         }
     }
 
+    /* WiFi provisioning */
+    const char *ssid = form_parser_get_value(fields, field_count, "hidden_ssid");
+    if (ssid == NULL || strlen(ssid) == 0) {
+        ssid = form_parser_get_value(fields, field_count, "selected_ssid");
+    }
+    const char *password = form_parser_get_value(fields, field_count, "password");
+    if (password == NULL) password = "";
+
+    if (ssid == NULL || strlen(ssid) == 0) {
+        /* No WiFi fields — just saving config */
+        send_json_success(client_fd, NULL);
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Configuration received for SSID: %s", ssid);
     send_json_success(client_fd, NULL);
 
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -264,8 +272,8 @@ static esp_err_t settings_handler(int client_fd, const http_request_t *req)
 static esp_err_t status_handler(int client_fd, const http_request_t *req)
 {
     (void)req;
-    
-    char json[1024];
+
+    char json[1536];
     char ip[16] = "";
     char ap_ip[16] = "";
     char ssid[33] = "";
@@ -273,47 +281,86 @@ static esp_err_t status_handler(int client_fd, const http_request_t *req)
     char node_id[64] = "";
     char backend_url[128] = "";
     char device_id[32] = "";
-    
+    char current_version[32] = "";
+    char device[32] = "";
+    char device_type[32] = "";
+    char sub_type[32] = "";
+    bool auto_update = false;
+
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(device_id, sizeof(device_id), "%02X%02X%02X%02X%02X%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    
+
     wifi_manager_get_ip(ip, sizeof(ip));
     wifi_manager_get_ap_ip(ap_ip, sizeof(ap_ip));
     wifi_manager_get_credentials(ssid, sizeof(ssid), pass, sizeof(pass));
     config_store_get_string("node_id", node_id, sizeof(node_id));
     config_store_get_string("backend_url", backend_url, sizeof(backend_url));
-    
+    config_store_get_string("device", device, sizeof(device));
+    config_store_get_string("device_type", device_type, sizeof(device_type));
+    config_store_get_string("sub_type", sub_type, sizeof(sub_type));
+    config_store_get_bool("auto_update", &auto_update);
+    ota_manager_get_current_version(current_version, sizeof(current_version));
+
     bool wifi_connected = wifi_manager_is_connected();
     bool has_node = (strlen(node_id) > 0);
     bool ap_active = wifi_manager_is_ap_active();
-    
+    bool has_app = boot_manager_has_application();
+    dlm_ota_state_t ota_state = ota_manager_get_state();
+    int ota_progress = ota_manager_get_progress();
+
+    const char *ota_state_str = "idle";
+    switch (ota_state) {
+        case OTA_STATE_CHECKING:   ota_state_str = "checking";   break;
+        case OTA_STATE_DOWNLOADING: ota_state_str = "downloading"; break;
+        case OTA_STATE_VERIFYING:  ota_state_str = "verifying";  break;
+        case OTA_STATE_COMPLETE:   ota_state_str = "complete";   break;
+        case OTA_STATE_FAILED:     ota_state_str = "failed";     break;
+        default:                   ota_state_str = "idle";       break;
+    }
+
     snprintf(json, sizeof(json),
         "{"
         "\"phase\":\"%s\","
         "\"wifi_connected\":%s,"
         "\"has_node_config\":%s,"
         "\"ap_active\":%s,"
+        "\"has_app\":%s,"
         "\"device_id\":\"%s\","
         "\"ip\":\"%s\","
         "\"ap_ip\":\"%s\","
         "\"ssid\":\"%s\","
         "\"backend_url\":\"%s\","
-        "\"node_id\":\"%s\""
+        "\"node_id\":\"%s\","
+        "\"device\":\"%s\","
+        "\"device_type\":\"%s\","
+        "\"sub_type\":\"%s\","
+        "\"current_version\":\"%s\","
+        "\"auto_update\":%s,"
+        "\"ota_state\":\"%s\","
+        "\"ota_progress\":%d"
         "}",
         boot_manager_get_phase_str(),
         wifi_connected ? "true" : "false",
         has_node ? "true" : "false",
         ap_active ? "true" : "false",
+        has_app ? "true" : "false",
         device_id,
         ip,
         ap_ip,
         ssid,
         backend_url,
-        node_id
+        node_id,
+        device,
+        device_type,
+        sub_type,
+        current_version,
+        auto_update ? "true" : "false",
+        ota_state_str,
+        ota_progress
     );
-    
+
     send_json_response(client_fd, 200, json);
     return ESP_OK;
 }
@@ -423,6 +470,105 @@ static esp_err_t root_handler(int client_fd, const http_request_t *req)
     return ESP_OK;
 }
 
+/* ============== /firmware-releases Handler ============== */
+
+static esp_err_t firmware_releases_handler(int client_fd, const http_request_t *req)
+{
+    (void)req;
+
+    char backend_url[128] = "";
+    config_store_get_string("backend_url", backend_url, sizeof(backend_url));
+    if (strlen(backend_url) == 0) {
+        send_json_error(client_fd, 400, "Backend URL not configured");
+        return ESP_FAIL;
+    }
+
+    char hardware_version[32] = "v1";
+    config_store_get_string("hardware_version", hardware_version, sizeof(hardware_version));
+    if (strlen(hardware_version) == 0) {
+        strcpy(hardware_version, "v1");
+    }
+
+    char releases_buf[8192] = {0};
+    esp_err_t err = custom_provider_query_releases(backend_url, hardware_version,
+                                                    CONFIG_IDF_TARGET,
+                                                    releases_buf, sizeof(releases_buf));
+    if (err != ESP_OK) {
+        send_json_error(client_fd, 502, "Failed to fetch releases from backend");
+        return ESP_FAIL;
+    }
+
+    http_server_send_response(client_fd, 200, HTTP_CONTENT_JSON, releases_buf, 0);
+    return ESP_OK;
+}
+
+/* ============== /ota-install Handler ============== */
+
+static esp_err_t ota_install_handler(int client_fd, const http_request_t *req)
+{
+    if (req->body == NULL || req->body_len == 0) {
+        send_json_error(client_fd, 400, "Missing request body");
+        return ESP_FAIL;
+    }
+
+    /* Parse JSON body */
+    char *body = malloc(req->body_len + 1);
+    if (body == NULL) {
+        send_json_error(client_fd, 500, "Out of memory");
+        return ESP_FAIL;
+    }
+    memcpy(body, req->body, req->body_len);
+    body[req->body_len] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (root == NULL) {
+        send_json_error(client_fd, 400, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *j_version = cJSON_GetObjectItem(root, "version");
+    cJSON *j_url = cJSON_GetObjectItem(root, "download_url");
+    cJSON *j_sig = cJSON_GetObjectItem(root, "signature");
+    cJSON *j_size = cJSON_GetObjectItem(root, "file_size");
+
+    if (!cJSON_IsString(j_version) || !cJSON_IsString(j_url) || !cJSON_IsString(j_sig)) {
+        cJSON_Delete(root);
+        send_json_error(client_fd, 400, "Missing required fields: version, download_url, signature");
+        return ESP_FAIL;
+    }
+
+    dlm_release_info_t info = {0};
+    strlcpy(info.version, j_version->valuestring, sizeof(info.version));
+    strlcpy(info.download_url, j_url->valuestring, sizeof(info.download_url));
+    strlcpy(info.signature, j_sig->valuestring, sizeof(info.signature));
+    if (cJSON_IsNumber(j_size)) {
+        info.file_size = (size_t)j_size->valueint;
+    }
+
+    cJSON_Delete(root);
+
+    esp_err_t err = ota_manager_start_update(&info);
+    if (err != ESP_OK) {
+        send_json_error(client_fd, 500, "Failed to start OTA update");
+        return ESP_FAIL;
+    }
+
+    send_json_success(client_fd, "\"ota_state\":\"downloading\"");
+    return ESP_OK;
+}
+
+/* ============== /boot-app Handler ============== */
+
+static esp_err_t boot_app_handler(int client_fd, const http_request_t *req)
+{
+    (void)req;
+    send_json_success(client_fd, NULL);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    boot_manager_boot_application();
+    return ESP_OK;
+}
+
 /* ============== Router/Dispatcher ==============
  * Since we need client_fd in handlers, we register a single
  * dispatcher that routes based on path/method
@@ -472,7 +618,19 @@ static esp_err_t portal_dispatcher(const http_request_t *req,
     if (strcmp(req->path, "/continue") == 0 && strcmp(req->method, "POST") == 0) {
         return continue_handler(client_fd, req);
     }
-    
+
+    if (strcmp(req->path, "/firmware-releases") == 0 && strcmp(req->method, "GET") == 0) {
+        return firmware_releases_handler(client_fd, req);
+    }
+
+    if (strcmp(req->path, "/ota-install") == 0 && strcmp(req->method, "POST") == 0) {
+        return ota_install_handler(client_fd, req);
+    }
+
+    if (strcmp(req->path, "/boot-app") == 0 && strcmp(req->method, "POST") == 0) {
+        return boot_app_handler(client_fd, req);
+    }
+
     /* 404 Not Found */
     http_server_send_error(client_fd, 404, "Not Found");
     return ESP_FAIL;
@@ -480,8 +638,13 @@ static esp_err_t portal_dispatcher(const http_request_t *req,
 
 /* ============== Public API ============== */
 
+static bool s_portal_initialized = false;
+
 esp_err_t web_portal_init(void)
 {
+    if (s_portal_initialized) {
+        return ESP_OK;
+    }
     /* Register our dispatcher for all routes */
     /* We'll handle routing internally based on path */
     
@@ -518,18 +681,29 @@ esp_err_t web_portal_init(void)
     
     err = http_server_register_handler("POST", "/continue", portal_dispatcher, NULL);
     if (err != ESP_OK) return err;
-    
+
+    err = http_server_register_handler("GET", "/firmware-releases", portal_dispatcher, NULL);
+    if (err != ESP_OK) return err;
+
+    err = http_server_register_handler("POST", "/ota-install", portal_dispatcher, NULL);
+    if (err != ESP_OK) return err;
+
+    err = http_server_register_handler("POST", "/boot-app", portal_dispatcher, NULL);
+    if (err != ESP_OK) return err;
+
     /* Start DNS server for captive portal */
     char ap_ip[16];
     if (wifi_manager_get_ap_ip(ap_ip, sizeof(ap_ip)) == ESP_OK) {
         dns_server_start(ap_ip);
     }
     
+    s_portal_initialized = true;
     ESP_LOGI(TAG, "Web portal initialized");
     return ESP_OK;
 }
 
 void web_portal_deinit(void)
 {
+    s_portal_initialized = false;
     dns_server_stop();
 }

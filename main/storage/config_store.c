@@ -82,6 +82,35 @@ const config_field_def_t dlm_config_schema[] = {
         .max_value = 0
     },
     
+    /* Device Classification */
+    {
+        .name = "device",
+        .label = "Device",
+        .type = CONFIG_FIELD_TYPE_STRING,
+        .default_str = "not-alloted",
+        .default_num = 0,
+        .min_value = 0,
+        .max_value = 0
+    },
+    {
+        .name = "device_type",
+        .label = "Device Type",
+        .type = CONFIG_FIELD_TYPE_STRING,
+        .default_str = "not-alloted",
+        .default_num = 0,
+        .min_value = 0,
+        .max_value = 0
+    },
+    {
+        .name = "sub_type",
+        .label = "Sub Type",
+        .type = CONFIG_FIELD_TYPE_STRING,
+        .default_str = "",
+        .default_num = 0,
+        .min_value = 0,
+        .max_value = 0
+    },
+
     /* Update Configuration */
     {
         .name = "update_interval_min",
@@ -94,6 +123,15 @@ const config_field_def_t dlm_config_schema[] = {
     },
     
     /* Feature Toggles */
+    {
+        .name = "auto_update",
+        .label = "Automatic Updates",
+        .type = CONFIG_FIELD_TYPE_BOOLEAN,
+        .default_str = "false",
+        .default_num = 0,
+        .min_value = 0,
+        .max_value = 0
+    },
     {
         .name = "debug_mode",
         .label = "Enable Debug Mode",

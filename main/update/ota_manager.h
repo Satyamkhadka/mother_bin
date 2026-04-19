@@ -12,6 +12,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "dlm_types.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -39,7 +40,7 @@ esp_err_t ota_manager_init(void);
 esp_err_t ota_manager_check_update(bool *update_available);
 
 /**
- * @brief Perform OTA update
+ * @brief Perform OTA update using pending update info
  *
  * Downloads, verifies, and installs the update.
  * After successful installation, device should be rebooted.
@@ -48,6 +49,46 @@ esp_err_t ota_manager_check_update(bool *update_available);
  * @return ESP_OK on success
  */
 esp_err_t ota_manager_perform_update(void (*progress_cb)(int percent));
+
+/**
+ * @brief Perform OTA update with explicit release info
+ *
+ * Same as ota_manager_perform_update but uses provided info instead
+ * of the pending update from check_update.
+ *
+ * @param info          Release info (version, url, signature, etc.)
+ * @param progress_cb   Optional callback for progress updates (0-100)
+ * @return ESP_OK on success
+ */
+esp_err_t ota_manager_perform_update_with_info(const dlm_release_info_t *info,
+                                                void (*progress_cb)(int percent));
+
+/**
+ * @brief Start OTA update in a background task
+ *
+ * Spawns a FreeRTOS task to download and install the update.
+ * The task updates internal state/progress which can be polled
+ * via ota_manager_get_state() and ota_manager_get_progress().
+ * On success, the task reboots the device automatically.
+ *
+ * @param info  Release info
+ * @return ESP_OK if task started, error otherwise
+ */
+esp_err_t ota_manager_start_update(const dlm_release_info_t *info);
+
+/**
+ * @brief Get current OTA state
+ *
+ * @return Current OTA state (idle, downloading, verifying, etc.)
+ */
+dlm_ota_state_t ota_manager_get_state(void);
+
+/**
+ * @brief Get current OTA progress (0-100)
+ *
+ * @return Progress percentage
+ */
+int ota_manager_get_progress(void);
 
 /**
  * @brief Get current firmware version
